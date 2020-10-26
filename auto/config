@@ -45,7 +45,7 @@ lb config noauto \
     --initsystem systemd \
     --firmware-binary false \
     --firmware-chroot false \
-    --syslinux-theme ubuntu \
+    --syslinux-theme ubuntu-xenial \
     --zsync false \
     "${@}"
 
