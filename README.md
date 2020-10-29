@@ -16,6 +16,8 @@ For now this _should_ build an ISO, no branding yet, not specific settings, no g
 
 Then, inside the box:
 
-3. `cp -r /vagrant /home/vagrant/builder`
-4. `cd /home/vagrant/builder`
-5. `./build`
+3. `cp -r /vagrant builder`
+4. `cd builder`
+5. `sudo ./build`
+
+this should leave an ISO file and two checksum files in `builds/amd64/`.
