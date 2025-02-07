@@ -21,3 +21,8 @@ Then, inside the box:
 5. `sudo ./build`
 
 this should leave an ISO file and two checksum files in `builds/amd64/`.
+
+
+```
+docker run --rm --privileged -it -v /proc:/proc -v ${PWD}:/working_dir -w /working_dir debian:latest ./build.sh releases/3.2/ubuntu-3.2-noble.conf
+```
