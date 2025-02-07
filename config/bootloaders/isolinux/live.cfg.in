@@ -1,15 +1,21 @@
 prompt 0
 
 MENU HIDDEN
-MENU AUTOBOOT Booting elementary OS live disk in # seconds
+MENU AUTOBOOT Booting Regolith Linux live disk in # seconds
 timeout 50
 
 label live-@FLAVOUR@
-	menu label ^Try or install elementary OS
+	menu label ^Try or install Regolith Linux
 	menu default
 	linux /casper/vmlinuz
 	initrd /casper/initrd.lz
 	append @APPEND_LIVE@
+
+label live-safe-@FLAVOUR@
+	menu label Try or install Regolith Linux (^Safe graphics)
+	linux /casper/vmlinuz
+	initrd /casper/initrd.lz
+	append @APPEND_LIVE@ nomodeset
 
 label check
 	menu label ^Check disk for defects

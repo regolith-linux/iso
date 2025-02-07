@@ -3,17 +3,20 @@ bcmwl-kernel-source
 dkms
 intel-microcode
 iucode-tool
-lupin-support
-mouseemu
+# open-vm-tools-desktop # exists in elementary
+# lupin-support
+# mouseemu
 setserial
 user-setup
 
 efibootmgr
-grub-efi
+# grub-efi # exists in regolith
 secureboot-db
 
+#if ARCHITECTURES amd64
 grub-efi-amd64
 grub-efi-amd64-bin
 grub-efi-amd64-signed
 shim
 shim-signed
+#endif

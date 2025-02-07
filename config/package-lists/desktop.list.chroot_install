@@ -1,5 +1,7 @@
 # Regolith meta packages
 regolith-desktop
-regolith-system
+regolith-system-ubuntu
+# regolith-session-sway
 
-#@XORG_HWE
+@XORG_HWE
+@KERNEL_HEADERS
