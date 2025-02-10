@@ -1,2 +1,2 @@
-deb http://archive.regolith-desktop.com/ubuntu/@CHANNEL @BASECODENAME main
-deb-src http://archive.regolith-desktop.com/ubuntu/@CHANNEL @BASECODENAME main
+deb http://archive.regolith-desktop.com/@BASEDISTRO/@CHANNEL @BASECODENAME main
+deb-src http://archive.regolith-desktop.com/@BASEDISTRO/@CHANNEL @BASECODENAME main

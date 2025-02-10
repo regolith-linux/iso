@@ -8,7 +8,16 @@ isolinux
 mokutil
 os-prober
 reiserfsprogs
+
+#ubiquity-frontend-gtk
+#ubiquity-ubuntu-artwork
+
+ubiquity
+ubiquity-casper
+ubiquity-frontend-debconf
 ubiquity-frontend-gtk
+ubiquity-frontend-gtk-panel
 ubiquity-ubuntu-artwork
+
 wamerican
 xfsprogs

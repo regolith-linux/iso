@@ -2,6 +2,7 @@
 regolith-desktop
 regolith-system-ubuntu
 # regolith-session-sway
+regolith-session-flashback
 
 @XORG_HWE
 @KERNEL_HEADERS
