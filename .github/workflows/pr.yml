@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build ISO
-        run: sudo ./build.sh releases/${{ matrix.version }}/${{ matrix.distro }}-${{ matrix.version }}-${{ matrix.codename }}.conf
+        run: sudo ./build.sh releases/${{ matrix.version }}/${{ matrix.distro }}-${{ matrix.codename }}.conf
 
       - name: Upload
         uses: actions/upload-artifact@v4
