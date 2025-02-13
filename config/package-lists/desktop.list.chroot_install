@@ -3,6 +3,7 @@ regolith-desktop
 regolith-system-ubuntu
 # regolith-session-sway
 regolith-session-flashback
+plymouth-theme-regolith-logo
 
 @XORG_HWE
 @KERNEL_HEADERS

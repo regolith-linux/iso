@@ -1,16 +1,21 @@
+btrfs-progs
 casper
 cifs-utils
 discover
+#distinst
 dmraid
 fwupd
 gparted
 isolinux
+# lupin-casper
 mokutil
 os-prober
 reiserfsprogs
 
 #ubiquity-frontend-gtk
 #ubiquity-ubuntu-artwork
+
+plymouth-theme-regolith-logo
 
 ubiquity
 ubiquity-casper
@@ -21,3 +26,21 @@ ubiquity-ubuntu-artwork
 
 wamerican
 xfsprogs
+
+#sudo
+#ubuntu-standard
+#laptop-detect
+#network-manager
+#net-tools
+#wireless-tools
+#wpagui
+#locales
+#grub-common
+#grub-gfxpayload-lists
+#grub-pc
+#grub-pc-bin
+#grub2-common
+#grub-efi-amd64-signed
+#shim-signed
+#mtools
+#binutils

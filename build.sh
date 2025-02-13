@@ -27,6 +27,7 @@ export TZ=America/New_York
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
+apt-get upgrade -y
 apt-get install -y live-build patch gnupg2 binutils zstd
 
 # The Debian repositories don't seem to have the `ubuntu-keyring` or `ubuntu-archive-keyring` packages
@@ -34,6 +35,12 @@ apt-get install -y live-build patch gnupg2 binutils zstd
 # To get the current key ID, find `ubuntu-keyring-xxxx-archive.gpg` in /etc/apt/trusted.gpg.d on a running
 # system and run `gpg --keyring /etc/apt/trusted.gpg.d/ubuntu-keyring-xxxx-archive.gpg --list-public-keys `
 apt-key adv --recv-keys --keyserver keyserver.ubuntu.com F6ECB3762474EDA9D21B7022871920D1991BC93C
+
+# apt-key adv --recv-keys --keyserver keyserver.ubuntu.com 54404762BBB6E853
+# apt-key adv --recv-keys --keyserver keyserver.ubuntu.com BDE6D2B9216EC7A8
+# apt-key adv --recv-keys --keyserver keyserver.ubuntu.com 0E98404D386FA1D9
+# apt-key adv --recv-keys --keyserver keyserver.ubuntu.com 6ED0E7B82643E131
+# apt-key adv --recv-keys --keyserver keyserver.ubuntu.com F8D2585B8783D481
 
 # TODO: This patch was submitted upstream at:
 # https://salsa.debian.org/live-team/live-build/-/merge_requests/314

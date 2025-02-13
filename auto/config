@@ -24,12 +24,11 @@ lb config noauto \
     --parent-archive-areas "main restricted universe multiverse" \
     --linux-packages linux-image \
     --linux-flavours "$KERNEL_FLAVORS" \
-    --bootappend-live "boot=casper maybe-ubiquity quiet splash" \
+    --bootappend-live "boot=casper only-ubiquity quiet splash" \
     --debootstrap-options="--extractor=ar --keyring=/etc/apt/trusted.gpg" \
     --checksums md5 \
     --mirror-bootstrap "$MIRROR_URL" \
     --parent-mirror-bootstrap "$MIRROR_URL" \
-    --parent-mirror-chroot "$MIRROR_URL" \
     --mirror-chroot-security "http://security.ubuntu.com/ubuntu/" \
     --parent-mirror-chroot-security "http://security.ubuntu.com/ubuntu/" \
     --mirror-binary-security "http://security.ubuntu.com/ubuntu/" \
@@ -49,10 +48,25 @@ lb config noauto \
     --security true \
     "${@}"
 
+    # --mirror-chroot-security "https://security.debian.org/debian-security/" \
+    # --parent-mirror-chroot-security "https://security.debian.org/debian-security/" \
+    # --mirror-binary-security "https://security.debian.org/debian-security/" \
+    # --parent-mirror-binary-security "https://security.debian.org/debian-security/" \
+    # --mirror-binary "https://ftp.debian.org/debian/" \
+    # --parent-mirror-binary "https://ftp.debian.org/debian/" \
+
+    # --mirror-chroot-security "http://security.ubuntu.com/ubuntu/" \
+    # --parent-mirror-chroot-security "http://security.ubuntu.com/ubuntu/" \
+    # --mirror-binary-security "http://security.ubuntu.com/ubuntu/" \
+    # --parent-mirror-binary-security "http://security.ubuntu.com/ubuntu/" \
+    # --mirror-binary "http://archive.ubuntu.com/ubuntu/" \
+    # --parent-mirror-binary "http://archive.ubuntu.com/ubuntu/" \
+
 # replace channel and suite
 sed -i "s/@CHANNEL/$CHANNEL/" config/archives/*.list*
 sed -i "s/@BASEDISTRO/$BASEDISTRO/" config/archives/*.list*
 sed -i "s/@BASECODENAME/$BASECODENAME/" config/archives/*.list*
+sed -i "s/@VERSION/$VERSION/" config/archives/*.list*
 
 DATE=$(date +%Y%m%d)
 sed -i "s/@CHANNEL/$CHANNEL/" config/includes.binary/.disk/info
