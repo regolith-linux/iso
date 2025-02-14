@@ -11,6 +11,7 @@ isolinux
 mokutil
 os-prober
 reiserfsprogs
+locales
 
 #ubiquity-frontend-gtk
 #ubiquity-ubuntu-artwork
