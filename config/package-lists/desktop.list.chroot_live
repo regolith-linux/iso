@@ -24,6 +24,7 @@ ubiquity-frontend-debconf
 ubiquity-frontend-gtk
 ubiquity-frontend-gtk-panel
 ubiquity-ubuntu-artwork
+ubiquity-slideshow-ubuntu
 
 wamerican
 xfsprogs
