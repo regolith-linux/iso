@@ -3,7 +3,8 @@ casper
 cifs-utils
 discover
 #distinst
-dmraid
+#dmraid # this is removed in oracular
+mdadm
 fwupd
 gparted
 isolinux
