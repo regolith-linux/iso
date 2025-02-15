@@ -13,36 +13,15 @@ os-prober
 reiserfsprogs
 locales
 
-#ubiquity-frontend-gtk
-#ubiquity-ubuntu-artwork
-
 plymouth-theme-regolith-logo
 
 ubiquity
 ubiquity-casper
-ubiquity-frontend-debconf
+#ubiquity-frontend-debconf
 ubiquity-frontend-gtk
-ubiquity-frontend-gtk-panel
-ubiquity-ubuntu-artwork
+#ubiquity-frontend-gtk-panel
+#ubiquity-ubuntu-artwork
 ubiquity-slideshow-ubuntu
 
 wamerican
 xfsprogs
-
-#sudo
-#ubuntu-standard
-#laptop-detect
-#network-manager
-#net-tools
-#wireless-tools
-#wpagui
-#locales
-#grub-common
-#grub-gfxpayload-lists
-#grub-pc
-#grub-pc-bin
-#grub2-common
-#grub-efi-amd64-signed
-#shim-signed
-#mtools
-#binutils

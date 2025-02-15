@@ -2,7 +2,7 @@ name: build iso
 
 on:
   workflow_dispatch:
-  push:
+  # push:
 
 concurrency: 
   group: ubuntu-iso-build

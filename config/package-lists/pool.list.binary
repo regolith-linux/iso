@@ -10,7 +10,9 @@ setserial
 user-setup
 
 efibootmgr
-# grub-efi # exists in regolith
+# exists in regolith
+grub-efi
+########
 secureboot-db
 
 #if ARCHITECTURES amd64

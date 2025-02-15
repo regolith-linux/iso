@@ -1,2 +1,2 @@
-deb http://archive.regolith-desktop.com/@BASEDISTRO/@CHANNEL @BASECODENAME v@VERSION
-deb-src http://archive.regolith-desktop.com/@BASEDISTRO/@CHANNEL @BASECODENAME v@VERSION
+deb [arch=@ARCH] https://archive.regolith-desktop.com/@BASEDISTRO/@CHANNEL @BASECODENAME @COMPONENT
+# deb-src [arch=@ARCH] https://archive.regolith-desktop.com/@BASEDISTRO/@CHANNEL @BASECODENAME @COMPONENT

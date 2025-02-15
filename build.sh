@@ -45,10 +45,17 @@ apt-key adv --recv-keys --keyserver keyserver.ubuntu.com F6ECB3762474EDA9D21B702
 # TODO: This patch was submitted upstream at:
 # https://salsa.debian.org/live-team/live-build/-/merge_requests/314
 # This can be removed when our Debian container has a version containing this fix
-patch -d /usr/lib/live/build/ < 314-follow-symlinks-when-measuring-size-of-efi-files.patch
+patch -d /usr/lib/live/build/ < patches/314-follow-symlinks-when-measuring-size-of-efi-files.patch
 
 # TODO: Remove this once debootstrap can natively build noble images:
-ln -sfn /usr/share/debootstrap/scripts/gutsy /usr/share/debootstrap/scripts/noble
+case $BASECODENAME in
+  noble|oracular)
+    if [ ! -f "/usr/share/debootstrap/scripts/$BASECODENAME" ]; then
+      ln -sfn /usr/share/debootstrap/scripts/gutsy /usr/share/debootstrap/scripts/$BASECODENAME
+    fi
+    ;;
+esac
+
 
 build () {
   BUILD_ARCH="$1"
@@ -60,40 +67,43 @@ build () {
   rm -rf config auto
   cp -r "$BASE_DIR"/auto/ .
   cp -r "$BASE_DIR"/config/ .
+
   # Make sure conffile specified as arg has correct name
   cp -f "$BASE_DIR"/"$CONFIG_FILE" terraform.conf
 
   echo -e "
 #------------------#
 # LIVE-BUILD CLEAN #
-#------------------#
-"
+#------------------#"
   lb clean
 
   echo -e "
 #-------------------#
 # LIVE-BUILD CONFIG #
-#-------------------#
-"
+#-------------------#"
   lb config
 
   echo -e "
 #------------------#
 # LIVE-BUILD BUILD #
-#------------------#
-"
+#------------------#"
   lb build
 
   echo -e "
 #---------------------------#
 # MOVE OUTPUT TO BUILDS DIR #
-#---------------------------#
-"
+#---------------------------#"
 
   YYYYMMDD="$(date +%Y%m%d)"
   OUTPUT_DIR="$BASE_DIR/builds/$BUILD_ARCH"
   mkdir -p "$OUTPUT_DIR"
-  FNAME="regolith-linux-$VERSION-$CHANNEL.$YYYYMMDD$OUTPUT_SUFFIX"
+
+  FNAME_PARTIAL=""
+  if [ "$CHANNEL" != "stable" ]; then
+    FNAME_PARTIAL="-$CHANNEL.$YYYYMMDD$OUTPUT_SUFFIX"
+  fi
+  FNAME="regolith-$BASEDISTRO-$BASECODENAME-$VERSION$FNAME_PARTIAL-$ARCH"
+
   mv "$BASE_DIR/tmp/$BUILD_ARCH/live-image-$BUILD_ARCH.hybrid.iso" "$OUTPUT_DIR/${FNAME}.iso"
 
   # cd into output to so {FNAME}.sha256.txt only

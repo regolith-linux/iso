@@ -16,7 +16,7 @@ fi
 
 lb config noauto \
     --architectures "$ARCH" \
-    --mode debian \
+    --mode ubuntu \
     --initramfs none \
     --distribution "$BASECODENAME" \
     --parent-distribution "$BASECODENAME" \
@@ -55,22 +55,21 @@ lb config noauto \
     # --mirror-binary "https://ftp.debian.org/debian/" \
     # --parent-mirror-binary "https://ftp.debian.org/debian/" \
 
-    # --mirror-chroot-security "http://security.ubuntu.com/ubuntu/" \
-    # --parent-mirror-chroot-security "http://security.ubuntu.com/ubuntu/" \
-    # --mirror-binary-security "http://security.ubuntu.com/ubuntu/" \
-    # --parent-mirror-binary-security "http://security.ubuntu.com/ubuntu/" \
-    # --mirror-binary "http://archive.ubuntu.com/ubuntu/" \
-    # --parent-mirror-binary "http://archive.ubuntu.com/ubuntu/" \
-
 # replace channel and suite
+sed -i "s/@ARCH/$ARCH/" config/archives/*.list*
 sed -i "s/@CHANNEL/$CHANNEL/" config/archives/*.list*
 sed -i "s/@BASEDISTRO/$BASEDISTRO/" config/archives/*.list*
 sed -i "s/@BASECODENAME/$BASECODENAME/" config/archives/*.list*
-sed -i "s/@VERSION/$VERSION/" config/archives/*.list*
+
+if [ "$CHANNEL" == "stable" ]; then
+    sed -i "s/@COMPONENT/v$VERSION/" config/archives/*.list*
+else
+    sed -i "s/@COMPONENT/main/" config/archives/*.list*
+fi
 
 DATE=$(date +%Y%m%d)
 sed -i "s/@CHANNEL/$CHANNEL/" config/includes.binary/.disk/info
-sed -i "s/@CODENAME/$CODENAME/" config/includes.binary/.disk/info
+sed -i "s/@CODENAME/$BASECODENAME/" config/includes.binary/.disk/info
 sed -i "s/@ARCH/$ARCH/" config/includes.binary/.disk/info
 sed -i "s/@DISTRO_NAME/$NAME/" config/includes.binary/.disk/info
 sed -i "s/@VERSION/$VERSION/" config/includes.binary/.disk/info
