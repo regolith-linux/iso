@@ -7,18 +7,7 @@ regolith-session-flashback
 
 # Regolith Artwork
 plymouth-theme-regolith-logo
-#regolith-look-ayu
-#regolith-look-ayu-dark
-#regolith-look-ayu-mirage
-#regolith-look-blackhole
-#regolith-look-default
-#regolith-look-dracula
-#regolith-look-gruvbox
-#regolith-look-i3-default
 regolith-look-lascaille
-#regolith-look-nevil
-#regolith-look-nord
-#regolith-look-solarized-dark
 
 # Regolith I3
 i3-swap-focus
@@ -35,24 +24,30 @@ i3xrocks-time
 i3xrocks-volume
 
 # Regolith desktop packages
-network-manager-openvpn
-network-manager-openvpn-gnome
-network-manager-pptp-gnome
-ubuntu-release-upgrader-gtk
-update-notifier
-software-properties-gtk
-zip
 acpid
 dmz-cursor-theme
 eog
 file-roller
-firefox
+#firefox
 gnome-disk-utility
 gnome-font-viewer
 gnome-power-manager
 gnome-screenshot
+nautilus
+language-pack-en
+language-pack-en-base
+language-pack-gnome-en
+language-pack-gnome-en-base
+network-manager-openvpn
+network-manager-openvpn-gnome
+network-manager-pptp-gnome
 policykit-desktop-privileges
-
+software-properties-gtk
+ubuntu-release-upgrader-gtk
+update-notifier
+xcursor-themes
+xdg-user-dirs-gtk
+zip
 
 # Regolith standard packages
 apt-transport-https
@@ -60,27 +55,18 @@ apturl
 apturl-common
 avahi-autoipd
 bash-completion
+curl
+less
+libnotify-bin
 rfkill
 rsyslog
 ssl-cert
 syslinux
 syslinux-common
-shim-signed
-systemd-resolved
-vim
-#metacity
-nautilus
-xcursor-themes
-xdg-user-dirs-gtk
-wget
-curl
+#shim-signed
 thermald
-language-pack-en
-language-pack-en-base
-language-pack-gnome-en
-language-pack-gnome-en-base
-less
-libnotify-bin
+vim
+wget
 
 @XORG_HWE
 @KERNEL_HEADERS

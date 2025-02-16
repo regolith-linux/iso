@@ -2,27 +2,17 @@ btrfs-progs
 casper
 cifs-utils
 discover
-#distinst
-#dmraid # this is removed in oracular
 mdadm
 fwupd
 gparted
 isolinux
-# lupin-casper
 mokutil
 os-prober
-reiserfsprogs
-locales
-
 plymouth-theme-regolith-logo
-
+reiserfsprogs
 ubiquity
 ubiquity-casper
-#ubiquity-frontend-debconf
 ubiquity-frontend-gtk
-#ubiquity-frontend-gtk-panel
-#ubiquity-ubuntu-artwork
 ubiquity-slideshow-ubuntu
-
 wamerican
 xfsprogs

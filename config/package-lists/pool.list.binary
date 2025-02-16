@@ -3,15 +3,13 @@ bcmwl-kernel-source
 dkms
 intel-microcode
 iucode-tool
-# open-vm-tools-desktop # exists in elementary
-# lupin-support
-# mouseemu
+#mouseemu
 setserial
 user-setup
 
 efibootmgr
 # exists in regolith
-grub-efi
+# grub-efi
 ########
 secureboot-db
 
