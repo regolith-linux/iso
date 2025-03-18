@@ -144,6 +144,13 @@ elif [ "$SESSIONS" = "sway" ]; then
   sed -i "s/@DESKTOP_SESSIONS/regolith-desktop-sway/" config/package-lists/desktop.list.chroot_install
 fi
 
+# replace lightdm sessions in chroot /usr/share file
+if [ "$SESSIONS" = "i3" ]; then
+  sed -i "s/@LIGHTDM_SESSION/regolith-x11/" config/includes.chroot/usr/share/lightdm/lightdm.conf.d/60-regolith-default-session.conf
+else
+  sed -i "s/@LIGHTDM_SESSION/regolith-wayland/" config/includes.chroot/usr/share/lightdm/lightdm.conf.d/60-regolith-default-session.conf
+fi
+
 # replace HWE and Kernel headers in package list
 sed -i "s/@XORG_HWE/$XORG_HWE/" config/package-lists/desktop.list.chroot_install
 sed -i "s/@KERNEL_HEADERS/linux-headers-$KERNEL_FLAVORS/" config/package-lists/desktop.list.chroot_install
