@@ -1,0 +1,5 @@
+#!/bin/sh
+
+rm -f /usr/share/applications/i3.desktop || true
+rm -f /usr/share/xsessions/i3.desktop || true
+rm -f /usr/share/xsessions/i3-with-shmlog.desktop || true
