@@ -1,0 +1,125 @@
+name: Build ISO
+run-name: Build ${{ inputs.version }} ISO ${{ inputs.distro }} ${{ inputs.codename }} ${{ inputs.arch }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 3.2, dev, next)"
+        type: string
+        required: true
+        default: ""
+      distro:
+        description: "Distro to build (debian, ubuntu)"
+        type: choice
+        options:
+          - ""
+          - debian
+          - ubuntu
+        required: false
+        default: ""
+      codename:
+        description: "Codename to build (e.g. noble, bookworm)"
+        type: string
+        required: false
+        default: ""
+      arch:
+        description: "Architecture to build (amd64, arm64)"
+        type: choice
+        options:
+          - ""
+          - amd64
+          - arm64
+        required: false
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.version }}-${{ inputs.distro }}-${{ inputs.codename }}-${{ inputs.arch }}
+  cancel-in-progress: true
+
+jobs:
+  matrix-builder:
+    runs-on: ubuntu-24.04
+    outputs:
+      includes: ${{ steps.builder.outputs.includes }}
+      runners: ${{ steps.builder.outputs.runners }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Matrix
+        id: builder
+        run: |
+          INCLUDES=()
+
+          for f in releases/${{ inputs.version }}/*; do
+            config="$(echo "$f" | cut -d/ -f3 | cut -d. -f1)"
+
+            distro="$(echo "$config" | cut -d- -f1)"
+            codename="$(echo "$config" | cut -d- -f2)"
+            version="$(echo "$f" | cut -d/ -f2)"
+
+            if [ -n "${{ inputs.distro }}" ] && [ "${{ inputs.distro }}" != "$distro" ]; then
+              continue
+            fi
+
+            if [ -n "${{ inputs.codename }}" ] && [ "${{ inputs.codename }}" != "$codename" ]; then
+              continue
+            fi
+
+            if [ -z "${{ inputs.arch }}" ] || [ "${{ inputs.arch }}" == "amd64" ]; then
+              INCLUDES+=("$(jq -n -c --arg distro "$distro" --arg codename "$codename" --arg version "$version" --arg arch "amd64" '$ARGS.named')")
+            fi
+
+            if [ "$distro" == "ubuntu" ] && [ "$codename" == "lunar" ] && [ "$version" == "3.0" ]; then
+              continue
+            fi
+
+            if [ -z "${{ inputs.arch }}" ] || [ "${{ inputs.arch }}" == "arm64" ]; then
+              INCLUDES+=("$(jq -n -c --arg distro "$distro" --arg codename "$codename" --arg version "$version" --arg arch "arm64" '$ARGS.named')")
+            fi
+          done
+
+          echo "runners=$(jq -n -c "$(jq -n -c --arg amd64 "ubuntu-24.04" --arg arm64 "ubuntu-24.04-arm" '$ARGS.named')" '$ARGS.named')" >> $GITHUB_OUTPUT
+          echo "includes=$(jq -n -c "[$(printf '%s\n' "${INCLUDES[@]}" | paste -sd,)]" '$ARGS.named')" >> $GITHUB_OUTPUT
+
+  build:
+    runs-on: ${{ fromJSON(needs.matrix-builder.outputs.runners)[matrix.arch] }}
+    needs: matrix-builder
+
+    container:
+      image: "ghcr.io/regolith-linux/ci-debian:bookworm-${{ matrix.arch }}"
+      volumes:
+        - /proc:/proc
+      options: --privileged
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.matrix-builder.outputs.includes) }}
+
+    env:
+      server-address: "${{ secrets.ISO_SERVER_HOSTNAME }}"
+      server-username: "${{ secrets.ISO_SERVER_USERNAME }}"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ISO
+        run: sudo ARCH="${{ matrix.arch }}" YYYYMMDD="$(date +%Y%m%d%H%M)-${{ github.run_id }}" ./build.sh releases/${{ matrix.version }}/${{ matrix.distro }}-${{ matrix.codename }}.conf
+
+      - name: Setup SSH
+        uses: regolith-linux/actions/setup-ssh@main
+        with:
+          ssh-host: "${{ env.server-address }}"
+          ssh-key: "${{ secrets.ISO_SERVER_SSH_KEY }}"
+
+      - name: Upload Package
+        uses: regolith-linux/actions/upload-files@main
+        with:
+          upload-from: "builds/${{ matrix.arch }}/"
+          upload-pattern: "*"
+          upload-to-base: "/mnt/regolith-archive-volume/isos/published/"
+          upload-to-folder: "${{ matrix.version }}/${{ matrix.distro }}/"
+          use-run-number: "false"
