@@ -1,0 +1,17 @@
+#!/bin/sh
+
+apt-get purge -y \
+  budgie-core \
+  evolution-data-server \
+  evolution-data-server-common \
+  gnome-mahjongg \
+  gnome-mines \
+  gnome-shell \
+  gnome-sudoku \
+  plymouth-theme-spinner \
+  plymouth-theme-ubuntu-text \
+  snapd \
+  ubuntu-desktop \
+  ubuntu-session \
+  unity-greeter \
+  zutty || true

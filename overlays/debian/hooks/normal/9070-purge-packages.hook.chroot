@@ -1,0 +1,10 @@
+#!/bin/sh
+
+apt-get purge -y \
+  evolution-data-server \
+  evolution-data-server-common \
+  gnome-mahjongg \
+  gnome-mines \
+  gnome-shell \
+  gnome-sudoku \
+  zutty || true
