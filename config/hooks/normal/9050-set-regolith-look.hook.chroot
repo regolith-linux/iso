@@ -1,0 +1,11 @@
+#!/bin/sh
+
+if ! command regolith-look >/dev/null; then
+  exit 0
+fi
+
+if ! regolith-look list | grep lascaille >/dev/null; then
+  exit 0
+fi
+
+regolith-look set lascaille
