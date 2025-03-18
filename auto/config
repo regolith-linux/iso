@@ -1,65 +1,154 @@
-#!/bin/bash
+#!/bin/sh
 
-set -Eeux
+set -e
 
-source vars.sh
+. ./terraform.conf
 
-# TODO: Focal doesn't have a xserver HWE stack yet
-XORG_HWE="${XORG_HWE:-}"
-
-# HWE starts with y, Y or 1?
-if [ "$HWE" = "yes" ]; then
+if [ "$HWE_KERNEL" = "yes" ]; then
+  if [ "$BASECODENAME" = "oracular" ]; then
+    KERNEL_FLAVORS="generic-hwe-24.04"
+  else
     KERNEL_FLAVORS="generic-hwe-${BASEVERSION}"
-    # XORG_HWE="xserver-xorg-hwe-${BASEVERSION}"
+  fi
 else
-    KERNEL_FLAVORS="generic"
+  KERNEL_FLAVORS="generic"
 fi
 
-lb config noauto \
-    --architectures "$ARCH" \
-    --mode ubuntu \
-    --initramfs none \
-    --distribution "$BASECODENAME" \
-    --parent-distribution "$BASECODENAME" \
-    --archive-areas "main restricted universe multiverse" \
-    --parent-archive-areas "main restricted universe multiverse" \
-    --linux-packages linux-image \
-    --linux-flavours "$KERNEL_FLAVORS" \
-    --bootappend-live "boot=casper maybe-ubiquity quiet splash" \
-    --mirror-bootstrap "$MIRROR_URL" \
-    --parent-mirror-bootstrap "$MIRROR_URL" \
-    --parent-mirror-chroot "$MIRROR_URL" \
-    --mirror-chroot-security "http://security.ubuntu.com/ubuntu/" \
-    --parent-mirror-chroot-security "http://security.ubuntu.com/ubuntu/" \
-    --mirror-binary-security "http://security.ubuntu.com/ubuntu/" \
-    --parent-mirror-binary-security "http://security.ubuntu.com/ubuntu/" \
-    --mirror-binary "mirror://mirrors.ubuntu.com/mirrors.txt" \
-    --parent-mirror-binary "mirror://mirrors.ubuntu.com/mirrors.txt" \
-    --keyring-packages ubuntu-keyring \
-    --apt-options "--yes --option Acquire::Retries=5 --option Acquire::http::Timeout=100" \
-    --cache-packages false \
-    --cache-stages false \
-    --binary-images iso-hybrid \
-    --iso-application "$NAME" \
-    --iso-volume "$NAME" \
-    --initsystem systemd \
-    --firmware-binary false \
-    --firmware-chroot false \
-    --syslinux-theme ubuntu-xenial \
-    --zsync false \
-    "${@}"
+if [ "$HWE_X11" = "yes" ]; then
+  if [ "$BASECODENAME" = "oracular" ]; then
+    XORG_HWE="xserver-xorg-hwe-24.04"
+  else
+    XORG_HWE="xserver-xorg-hwe-${BASEVERSION}"
+  fi
+fi
 
-# replace channel and suite
+case $BASEDISTRO in
+  ubuntu)
+    if [ "$ARCH" = "amd64" ]; then
+      BINARY_MIRROR_URL="http://archive.ubuntu.com/ubuntu/"
+      SECURITY_MIRROR_URL="http://security.ubuntu.com/ubuntu/"
+    elif [ "$ARCH" = "arm64" ]; then
+      BINARY_MIRROR_URL="http://ports.ubuntu.com/ubuntu-ports/"
+      SECURITY_MIRROR_URL="http://ports.ubuntu.com/ubuntu-ports/"
+    fi
+    if [ "$BASECODENAME" = "kinetic" ] || [ "$BASECODENAME" = "lunar" ] || [ "$BASECODENAME" = "mantic" ]; then
+      BINARY_MIRROR_URL="http://old-releases.ubuntu.com/ubuntu/"
+      SECURITY_MIRROR_URL="http://old-releases.ubuntu.com/ubuntu/"
+    fi
+    KEYRING_PACKAGES="ubuntu-keyring"
+    ARCHIVE_AREAS="main restricted universe multiverse"
+    BOOTAPPEND_LIVE="boot=casper quiet splash"
+    BOOTAPPEND_INSTALL="boot=casper only-ubiquity quiet splash"
+    DEBOOTSTRAP_OPTION="--keyring=/etc/apt/trusted.gpg"
+    DEBIAN_INSTALLER=""
+    INITRAMFS="none"
+    ;;
+
+  debian)
+    BINARY_MIRROR_URL="http://deb.debian.org/debian/"
+    SECURITY_MIRROR_URL="http://security.debian.org/debian-security/"
+    KEYRING_PACKAGES="debian-archive-keyring"
+
+    if [ "$BASECODENAME" = "bullseye" ]; then
+      ARCHIVE_AREAS="main contrib non-free"
+    else
+      ARCHIVE_AREAS="main contrib non-free non-free-firmware"
+    fi
+
+    BOOTAPPEND_LIVE="boot=live components quiet splash"
+    BOOTAPPEND_INSTALL="nouveau.modeset=0"
+    DEBOOTSTRAP_OPTION="--include=apt-transport-https,ca-certificates,openssl"
+    DEBIAN_INSTALLER="--debian-installer live --debian-installer-gui true --debian-installer-distribution bookworm"
+    INITRAMFS="live-boot"
+
+    ;;
+  *)
+    echo "E: Unknown distro" > /dev/stderr
+    exit 1
+esac
+
+case $VERSION in
+  next|dev|3.3) USE_BACKPORTS="false" ;;
+  *)            USE_BACKPORTS="true" ;;
+esac
+
+lb config noauto \
+  --architectures "$ARCH" \
+  --mode debian \
+  --initramfs "$INITRAMFS" \
+  --distribution "$BASECODENAME" \
+  --parent-distribution "$BASECODENAME" \
+  --apt-options "--yes --option Acquire::Retries=2 --option Acquire::http::Timeout=45" \
+  --archive-areas "$ARCHIVE_AREAS" \
+  --debootstrap-options="--extractor=ar $DEBOOTSTRAP_OPTION" \
+  --keyring-packages "$KEYRING_PACKAGES" \
+  --updates true \
+  --security true \
+  --source false \
+  --backports "$USE_BACKPORTS" \
+  --firmware-binary false \
+  --firmware-chroot false \
+  --mirror-bootstrap "$BINARY_MIRROR_URL" \
+  --mirror-binary "$BINARY_MIRROR_URL" \
+  --mirror-binary-security "$SECURITY_MIRROR_URL" \
+  --mirror-chroot-security "$SECURITY_MIRROR_URL" \
+  --iso-application "$NAME" \
+  --iso-volume "$NAME" \
+  --binary-images iso-hybrid \
+  --linux-packages linux-image \
+  --linux-flavours "$KERNEL_FLAVORS" \
+  --memtest memtest86+ \
+  --bootappend-live "$BOOTAPPEND_LIVE" \
+  --bootappend-install "$BOOTAPPEND_INSTALL" \
+  --uefi-secure-boot enable \
+  --cache-packages false \
+  --checksums md5 \
+  --zsync false \
+  $DEBIAN_INSTALLER "${@}"
+
+# enable backports for older releases in archive list
+case $VERSION in
+  next|dev|3.3) ;; # do nothing
+  *)
+    echo "deb [arch=@ARCH] https://archive.regolith-desktop.com/@BASEDISTRO/backports @BASECODENAME main" >> config/archives/regolith.list
+    ;;
+esac
+
+sed -i "s/@ARCH/$ARCH/" config/archives/*.list*
 sed -i "s/@CHANNEL/$CHANNEL/" config/archives/*.list*
+sed -i "s/@BASEDISTRO/$BASEDISTRO/" config/archives/*.list*
 sed -i "s/@BASECODENAME/$BASECODENAME/" config/archives/*.list*
 
+if [ "$CHANNEL" = "stable" ]; then
+  sed -i "s/@COMPONENT/v$VERSION/" config/archives/*.list*
+else
+  sed -i "s/@COMPONENT/main/" config/archives/*.list*
+fi
+
+# replace information for disk info
 DATE=$(date +%Y%m%d)
 sed -i "s/@CHANNEL/$CHANNEL/" config/includes.binary/.disk/info
+sed -i "s/@CODENAME/$BASECODENAME/" config/includes.binary/.disk/info
 sed -i "s/@ARCH/$ARCH/" config/includes.binary/.disk/info
 sed -i "s/@DISTRO_NAME/$NAME/" config/includes.binary/.disk/info
 sed -i "s/@VERSION/$VERSION/" config/includes.binary/.disk/info
 sed -i "s/@DATE/$DATE/" config/includes.binary/.disk/info
 
-if [ ! "x${XORG_HWE}" == "x" ] ; then
-  sed -i "s/#@XORG_HWE/$XORG_HWE/" config/package-lists/desktop.list.chroot_install
+# replace desktop sessions in package list
+if [ "$SESSIONS" = "all" ]; then
+  sed -i "/@DESKTOP_SESSIONS/aregolith-desktop-sway" config/package-lists/desktop.list.chroot_install
+  sed -i "s/@DESKTOP_SESSIONS/regolith-desktop-i3/" config/package-lists/desktop.list.chroot_install
+elif [ "$SESSIONS" = "i3" ]; then
+  sed -i "s/@DESKTOP_SESSIONS/regolith-desktop-i3/" config/package-lists/desktop.list.chroot_install
+elif [ "$SESSIONS" = "sway" ]; then
+  sed -i "s/@DESKTOP_SESSIONS/regolith-desktop-sway/" config/package-lists/desktop.list.chroot_install
+fi
+
+# replace HWE and Kernel headers in package list
+sed -i "s/@XORG_HWE/$XORG_HWE/" config/package-lists/desktop.list.chroot_install
+sed -i "s/@KERNEL_HEADERS/linux-headers-$KERNEL_FLAVORS/" config/package-lists/desktop.list.chroot_install
+
+# secureboot-db doesn't exist for focal/arm64
+if [ "$BASECODENAME" = "focal" ] && [ "$ARCH" = "arm64" ]; then
+  sed -i "s/secureboot-db//" config/package-lists/pool-ubuntu.list.binary
 fi

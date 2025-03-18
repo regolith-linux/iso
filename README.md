@@ -1,23 +1,51 @@
 # Regolith ISO Builder
 
-This is a fork of Elementary's ISO build scripts and there's still a ton of work left to do.
-
-For now this _should_ build an ISO, no branding yet, not specific settings, no garantees that it will even boot or install. You've been warned.
-
-## Prerequisites
-
-- [Vagrant](https://www.vagrantup.com/) (>= 2.2.10)
-- A backend for Vagrant. Most people will probably want to install [Virtualbox](https://www.virtualbox.org) (tested with version >= 6.1.10).
+This is a fork of Elementary's OS [build scripts]. Many thanks to elementary
+crew for the great work!
 
 ## Build ISO
 
-1. `vagrant up`
-2. `vagrant ssh`
+The following example uses Docker and assumes you have Docker correctly installed
+and set up.
 
-Then, inside the box:
+Clone this project & cd into it:
 
-3. `cp -r /vagrant builder`
-4. `cd builder`
-5. `sudo ./build`
+```bash
+git clone https://github.com/regolith-linux/iso && cd iso
+```
 
-this should leave an ISO file and two checksum files in `builds/amd64/`.
+and then execute the followin docker command:
+
+```bash
+docker run \
+    --rm \
+    -it \
+    --privileged \
+    -v /proc:/proc \
+    -v ${PWD}:/workspace \
+    -w /workspace \
+    ghcr.io/regolith-linux/ci-debian:bookworm-amd64 \
+    sudo ./build.sh releases/3.2/ubuntu-noble.conf
+```
+
+This should generate the following files in `builds/amd64/`:
+
+- `regolith-<VERSION>-<CODENAME>-<ARCH>.iso`
+- `regolith-<VERSION>-<CODENAME>-<ARCH>.iso.contents`
+- `regolith-<VERSION>-<CODENAME>-<ARCH>.iso.log`
+- `regolith-<VERSION>-<CODENAME>-<ARCH>.iso.packages`
+- `regolith-<VERSION>-<CODENAME>-<ARCH>.sha256sum`
+
+## Examples
+
+### Building for `arm64`
+
+Set `ARCH=arm64` environment variable when executing `build.sh`.
+
+```bash
+docker run \
+    ... \
+    sudo ARCH=arm64 ./build.sh releases/3.2/ubuntu-noble.conf
+```
+
+[build scripts]: https://github.com/elementary/os
