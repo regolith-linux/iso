@@ -1,0 +1,20 @@
+# Regolith Minimal
+ubuntu-keyring
+
+# Regolith Standard
+friendly-recovery
+language-selector-common
+software-properties-gtk
+software-properties-common
+ubuntu-release-upgrader-gtk
+update-notifier
+
+# Regolith Desktop Common
+alsa-base
+alsa-utils
+kerneloops
+language-pack-en
+language-pack-en-base
+language-pack-gnome-en
+language-pack-gnome-en-base
+policykit-desktop-privileges

@@ -1,5 +1,16 @@
-# Regolith meta packages
+regolith-minimal
+regolith-standard
+regolith-branding
+regolith-common
 regolith-desktop
-regolith-system
+@DESKTOP_SESSIONS
 
-#@XORG_HWE
+#if ARCHITECTURES amd64
+firefox
+thermald
+syslinux
+syslinux-common
+#endif
+
+@XORG_HWE
+@KERNEL_HEADERS
