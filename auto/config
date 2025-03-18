@@ -5,7 +5,7 @@ set -e
 . ./terraform.conf
 
 if [ "$HWE_KERNEL" = "yes" ]; then
-  if [ "$BASECODENAME" = "oracular" ]; then
+  if [ "$BASECODENAME" = "oracular" ] || [ "$BASECODENAME" = "plucky" ]; then
     KERNEL_FLAVORS="generic-hwe-24.04"
   else
     KERNEL_FLAVORS="generic-hwe-${BASEVERSION}"
@@ -15,7 +15,7 @@ else
 fi
 
 if [ "$HWE_X11" = "yes" ]; then
-  if [ "$BASECODENAME" = "oracular" ]; then
+  if [ "$BASECODENAME" = "oracular" ] || [ "$BASECODENAME" = "plucky" ]; then
     XORG_HWE="xserver-xorg-hwe-24.04"
   else
     XORG_HWE="xserver-xorg-hwe-${BASEVERSION}"
@@ -158,4 +158,7 @@ sed -i "s/@KERNEL_HEADERS/linux-headers-$KERNEL_FLAVORS/" config/package-lists/d
 # secureboot-db doesn't exist for focal/arm64
 if [ "$BASECODENAME" = "focal" ] && [ "$ARCH" = "arm64" ]; then
   sed -i "s/secureboot-db//" config/package-lists/pool-ubuntu.list.binary
+fi
+if [ "$BASECODENAME" = "plucky" ]; then
+  sed -i "s/kerneloops//" config/package-lists/desktop-ubuntu.list.chroot_install
 fi

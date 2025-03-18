@@ -123,7 +123,7 @@ patch -d /usr/lib/live/build/ < patches/314-follow-symlinks-when-measuring-size-
 
 # TODO: Remove this once debootstrap can natively build noble images:
 case $BASECODENAME in
-  lunar|mantic|noble|oracular)
+  lunar|mantic|noble|oracular|plucky)
     if [ ! -f "/usr/share/debootstrap/scripts/$BASECODENAME" ]; then
       ln -sfn /usr/share/debootstrap/scripts/gutsy /usr/share/debootstrap/scripts/$BASECODENAME
     fi
