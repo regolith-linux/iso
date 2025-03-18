@@ -1,2 +1,2 @@
-deb http://ppa.launchpad.net/regolith-linux/@CHANNEL/ubuntu @BASECODENAME main
-deb-src http://ppa.launchpad.net/regolith-linux/@CHANNEL/ubuntu @BASECODENAME main
+deb [arch=@ARCH] http://archive.regolith-desktop.com/@BASEDISTRO/@CHANNEL @BASECODENAME @COMPONENT
+deb-src [arch=@ARCH] http://archive.regolith-desktop.com/@BASEDISTRO/@CHANNEL @BASECODENAME @COMPONENT
