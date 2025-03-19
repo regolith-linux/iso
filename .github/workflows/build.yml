@@ -52,6 +52,8 @@ jobs:
         run: |
           INCLUDES=()
 
+          echo "Building ISO for the following:"
+
           for f in releases/${{ inputs.version }}/*; do
             config="$(echo "$f" | cut -d/ -f3 | cut -d. -f1)"
 
@@ -69,6 +71,7 @@ jobs:
 
             if [ -z "${{ inputs.arch }}" ] || [ "${{ inputs.arch }}" == "amd64" ]; then
               INCLUDES+=("$(jq -n -c --arg distro "$distro" --arg codename "$codename" --arg version "$version" --arg arch "amd64" '$ARGS.named')")
+              echo "  - ${distro}/${codename} ${version} (amd64)"
             fi
 
             if [ "$distro" == "ubuntu" ] && [ "$codename" == "lunar" ] && [ "$version" == "3.0" ]; then
@@ -77,6 +80,7 @@ jobs:
 
             if [ -z "${{ inputs.arch }}" ] || [ "${{ inputs.arch }}" == "arm64" ]; then
               INCLUDES+=("$(jq -n -c --arg distro "$distro" --arg codename "$codename" --arg version "$version" --arg arch "arm64" '$ARGS.named')")
+              echo "  - ${distro}/${codename} ${version} (arm64)"
             fi
           done
 
