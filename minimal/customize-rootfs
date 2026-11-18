@@ -1,0 +1,90 @@
+#!/bin/sh
+# mmdebstrap customize hook of regolith-minimal-rootfs.
+#
+#   customize-rootfs ROOT PLAN INCLUDES [FORBIDDEN...]
+#
+# Runs after every package is installed and configured, before the tarball
+# is written. Replaces build-time apt configuration with the sources the
+# installed system uses, leaves a placeholder identity for the installer,
+# enables the graphical boot, and checks that the image holds exactly the
+# planned packages and nothing that points back at the build.
+
+set -eu
+
+root=$1
+plan=$2
+includes=$3
+shift 3
+
+fail() {
+    echo "customize-rootfs: $*" >&2
+    exit 1
+}
+
+admindir="$root/var/lib/dpkg"
+
+# --- The installed package set is exactly the plan, fully configured. ---
+dpkg-query --admindir="$admindir" -W -f '${db:Status-Abbrev} ${Package} ${Version}\n' \
+    | awk '$1 == "ii" { print $2, $3; next } { print "unconfigured:", $2; }' \
+    | LC_ALL=C sort > "$plan.installed"
+if ! LC_ALL=C sort "$plan" | cmp -s - "$plan.installed"; then
+    LC_ALL=C sort "$plan" | diff - "$plan.installed" >&2 || true
+    fail "installed packages differ from the plan"
+fi
+audit=$(dpkg --admindir="$admindir" --audit)
+[ -z "$audit" ] || fail "dpkg --audit reports problems: $audit"
+
+# --- apt: only package-owned configuration plus the two source files. ---
+owned="$plan.owned"
+cat "$admindir"/info/*.list | LC_ALL=C sort -u > "$owned"
+find "$root/etc/apt" ! -type d | while IFS= read -r file; do
+    if ! grep -qxF "${file#"$root"}" "$owned"; then
+        rm -f "$file"
+    fi
+done
+for file in etc/apt/sources.list.d/debian.sources etc/apt/sources.list.d/regolith.sources; do
+    install -m 0644 "$includes/$file" "$root/$file"
+done
+for keyring in debian-archive-keyring.gpg regolith-archive-keyring.gpg; do
+    grep -qxF "/usr/share/keyrings/$keyring" "$owned" || fail "no package ships $keyring"
+done
+
+# --- Placeholder identity, filled in by the installer. ---
+echo regolith > "$root/etc/hostname"
+if [ ! -e "$root/etc/machine-id" ]; then
+    install -m 0444 /dev/null "$root/etc/machine-id"
+elif [ -s "$root/etc/machine-id" ]; then
+    rm -f "$root/etc/machine-id"
+    install -m 0444 /dev/null "$root/etc/machine-id"
+fi
+if [ -e "$root/var/lib/dbus/machine-id" ] && [ ! -L "$root/var/lib/dbus/machine-id" ]; then
+    rm -f "$root/var/lib/dbus/machine-id"
+fi
+if [ ! -L "$root/etc/resolv.conf" ]; then
+    rm -f "$root/etc/resolv.conf"
+fi
+awk -F: '$3 >= 1000 && $3 <= 59999 { found = 1 } END { exit found }' "$root/etc/passwd" \
+    || fail "the image has a regular user account"
+awk -F: '$1 == "root" && $2 !~ /^[!*]/ { found = 1 } END { exit found }' "$root/etc/shadow" \
+    || fail "the root account has a usable password"
+
+# --- Boot into lightdm with NetworkManager. ---
+units="$root/etc/systemd/system"
+ln -sfn /usr/lib/systemd/system/graphical.target "$units/default.target"
+[ -L "$units/display-manager.service" ] \
+    || ln -s /usr/lib/systemd/system/lightdm.service "$units/display-manager.service"
+mkdir -p "$units/multi-user.target.wants"
+[ -L "$units/multi-user.target.wants/NetworkManager.service" ] \
+    || ln -s /usr/lib/systemd/system/NetworkManager.service \
+        "$units/multi-user.target.wants/NetworkManager.service"
+
+# --- Nothing under /etc refers to where and from what it was built. ---
+# (Link targets are checked in the finished archive: under fakechroot the
+# links on disk still carry the chroot directory.)
+for location in "$@"; do
+    if grep -rlaF -- "$location" "$root/etc" >&2; then
+        fail "files under /etc mention $location"
+    fi
+done
+
+rm -f "$plan.installed" "$owned"
