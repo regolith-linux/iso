@@ -1,0 +1,879 @@
+#!/usr/bin/python3
+"""Build the root filesystem payload of the minimal Regolith installer.
+
+    regolith-minimal-rootfs plan --sources FILE
+    regolith-minimal-rootfs build --sources FILE --output PATH
+
+FILE is a deb822 sources file whose stanzas name file:, http: or https:
+archives and a Signed-By keyring. Those archives are the only package
+sources used; with file: archives alone no network access is needed.
+
+plan prints the package set of the image, one "name version" line per
+package in byte order. build installs exactly that set with mmdebstrap
+in fakechroot mode, which needs neither root nor user namespaces, and
+writes the image to PATH as an uncompressed tar archive. PATH is only
+replaced once the archive is complete.
+
+The package set starts from the roots below plus every Essential
+package and grows only through Pre-Depends and Depends, and through the
+Recommends of Regolith session, i3, sway and window-manager packages
+(and regolith-desktop itself), taking the first installable alternative
+of every dependency at its candidate version. The Pre-Depends/Depends
+closure is settled as a whole first; a followed recommendation is then
+added only when it fits together with its own closure, and otherwise
+left out.
+"""
+
+import os
+import re
+import resource
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import tarfile
+import tempfile
+from collections import deque
+from pathlib import Path
+
+PROG = "regolith-minimal-rootfs"
+SUITE = "trixie"
+ARCH = "amd64"
+MULTIARCH = "x86_64-linux-gnu"
+SYSTEM_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+URI_SCHEMES = ("file:", "http:", "https:")
+HOOK = Path(__file__).resolve().parent.parent / "minimal" / "customize-rootfs"
+
+ROOTS = (
+    # desktop
+    "regolith-desktop",
+    "regolith-session-flashback",
+    "regolith-session-sway",
+    # display manager
+    "lightdm",
+    "regolith-lightdm-config",
+    # boot and init
+    "linux-image-amd64",
+    "systemd-sysv",
+    "grub-efi-amd64",
+    # system access
+    "network-manager",
+    "sudo",
+    "login",
+    # package handling
+    "apt",
+    "ca-certificates",
+    "regolith-archive-keyring",
+)
+
+# Recommends are followed only for Regolith packages with these names.
+RECOMMENDS_ORIGIN = "Regolith"
+RECOMMENDS_NAMES = ("regolith-desktop",)
+RECOMMENDS_PREFIXES = (
+    "regolith-session-",
+    "regolith-i3-",
+    "regolith-sway-",
+    "regolith-wm-",
+)
+
+USAGE = f"""usage: {PROG} plan --sources FILE
+       {PROG} build --sources FILE --output PATH"""
+
+
+class Failure(Exception):
+    """An error reported on stderr; the command exits non-zero."""
+
+
+def log(message):
+    print(f"{PROG}: {message}", file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Command line
+
+
+def parse_args(argv):
+    if not argv or argv[0] not in ("plan", "build"):
+        raise Failure(f"expected a subcommand\n{USAGE}")
+    command, rest = argv[0], argv[1:]
+    allowed = {"plan": ("--sources",), "build": ("--sources", "--output")}[command]
+    options = {}
+    while rest:
+        option = rest.pop(0)
+        if option not in allowed:
+            raise Failure(f"unexpected argument for {command}: {option!r}\n{USAGE}")
+        if option in options:
+            raise Failure(f"{option} given more than once\n{USAGE}")
+        if not rest:
+            raise Failure(f"{option} needs a value\n{USAGE}")
+        options[option] = rest.pop(0)
+    missing = [option for option in allowed if option not in options]
+    if missing:
+        raise Failure(f"{command} needs {' and '.join(missing)}\n{USAGE}")
+    return command, options
+
+
+# ---------------------------------------------------------------------------
+# deb822 sources
+
+
+def parse_deb822(text):
+    """Paragraphs as lists of (field, value) pairs, keeping multi-line values."""
+    paragraphs, current = [], []
+    for line in text.replace("\r\n", "\n").split("\n"):
+        if line.startswith("#"):
+            continue
+        if not line.strip():
+            if current:
+                paragraphs.append(current)
+                current = []
+        elif line[0] in " \t":
+            if not current:
+                raise Failure(f"continuation line without a field: {line!r}")
+            field, value = current[-1]
+            current[-1] = (field, value + "\n" + line)
+        else:
+            field, sep, value = line.partition(":")
+            if not sep or not field.strip():
+                raise Failure(f"malformed line: {line!r}")
+            current.append((field.strip(), value.strip()))
+    if current:
+        paragraphs.append(current)
+    return paragraphs
+
+
+class SourceEntry:
+    def __init__(self, fields):
+        self.fields = fields
+        lookup = {field.lower(): value for field, value in fields}
+        if len(lookup) != len(fields):
+            raise Failure("a sources stanza repeats a field")
+        self.enabled = lookup.get("enabled", "yes").strip().lower() not in ("no", "false", "0")
+        self.types = lookup.get("types", "").split()
+        self.uris = lookup.get("uris", "").split()
+        self.suites = lookup.get("suites", "").split()
+        self.signed_by = lookup.get("signed-by", "").strip()
+        if not self.enabled:
+            return
+        if self.types != ["deb"]:
+            raise Failure(f"unsupported source type {' '.join(self.types) or '(none)'}: only deb is used")
+        if not self.uris or not self.suites:
+            raise Failure("every sources stanza needs URIs and Suites")
+        for uri in self.uris:
+            if not uri.startswith(URI_SCHEMES):
+                raise Failure(f"only file:, http: and https: archives can be used, not {uri}")
+        if not self.signed_by:
+            raise Failure(f"no Signed-By keyring for {' '.join(self.uris)}")
+
+    def archive_dirs(self):
+        """Local directories of the file: archives."""
+        return [re.sub(r"^file:(//)?", "", uri) for uri in self.uris if uri.startswith("file:")]
+
+    def render(self, local_scheme):
+        """The stanza with file: archives rewritten to local_scheme."""
+        lines = []
+        for field, value in self.fields:
+            if field.lower() == "uris":
+                value = " ".join(
+                    local_scheme + uri[len("file:"):] if uri.startswith("file:") else uri
+                    for uri in self.uris
+                )
+            lines.append(f"{field}: {value}")
+        return "\n".join(lines) + "\n"
+
+
+def read_sources(path):
+    try:
+        text = Path(path).read_text()
+    except (OSError, UnicodeDecodeError) as error:
+        raise Failure(f"cannot read sources file {path}: {error}")
+    entries = [SourceEntry(fields) for fields in parse_deb822(text)]
+    entries = [entry for entry in entries if entry.enabled]
+    if not entries:
+        raise Failure(f"{path} names no package sources")
+    return entries
+
+
+def write_sources(entries, path, scheme):
+    Path(path).write_text("\n".join(entry.render(scheme) for entry in entries))
+
+
+# ---------------------------------------------------------------------------
+# Debian versions and relationships
+
+
+def _order(char):
+    if char == "~":
+        return -1
+    if char.isdigit():
+        return 0
+    if not char:
+        return 0
+    if char.isalpha():
+        return ord(char)
+    return ord(char) + 256
+
+
+def _compare_fragment(a, b):
+    i = j = 0
+    while i < len(a) or j < len(b):
+        difference = 0
+        while (i < len(a) and not a[i].isdigit()) or (j < len(b) and not b[j].isdigit()):
+            ac = _order(a[i]) if i < len(a) else 0
+            bc = _order(b[j]) if j < len(b) else 0
+            if ac != bc:
+                return ac - bc
+            i += 1
+            j += 1
+        while i < len(a) and a[i] == "0":
+            i += 1
+        while j < len(b) and b[j] == "0":
+            j += 1
+        while i < len(a) and a[i].isdigit() and j < len(b) and b[j].isdigit():
+            if not difference:
+                difference = ord(a[i]) - ord(b[j])
+            i += 1
+            j += 1
+        if i < len(a) and a[i].isdigit():
+            return 1
+        if j < len(b) and b[j].isdigit():
+            return -1
+        if difference:
+            return difference
+    return 0
+
+
+def _split_version(version):
+    epoch, _, rest = version.partition(":") if ":" in version else ("0", "", version)
+    upstream, _, revision = rest.rpartition("-") if "-" in rest else (rest, "", "0")
+    return int(epoch or 0), upstream, revision
+
+
+def compare_versions(a, b):
+    ea, ua, ra = _split_version(a)
+    eb, ub, rb = _split_version(b)
+    if ea != eb:
+        return -1 if ea < eb else 1
+    result = _compare_fragment(ua, ub) or _compare_fragment(ra, rb)
+    return (result > 0) - (result < 0)
+
+
+RELATIONS = {
+    "<<": lambda c: c < 0, "<=": lambda c: c <= 0, "=": lambda c: c == 0,
+    ">=": lambda c: c >= 0, ">>": lambda c: c > 0,
+    "<": lambda c: c <= 0, ">": lambda c: c >= 0,  # obsolete spellings
+}
+
+
+def version_matches(version, relation, wanted):
+    if relation is None:
+        return True
+    return RELATIONS[relation](compare_versions(version, wanted))
+
+
+DEPENDENCY = re.compile(
+    r"^\s*(?P<name>[^\s:(\[<]+)(?::\S+)?\s*"
+    r"(?:\(\s*(?P<relation><<|<=|>=|>>|=|<|>)\s*(?P<version>[^\s)]+)\s*\))?"
+    r"\s*(?:\[[^\]]*\])?\s*(?:<[^>]*>\s*)*$"
+)
+
+
+def parse_relationships(value):
+    """A relationship field as a list of OR groups of (name, relation, version)."""
+    groups = []
+    for text in (value or "").split(","):
+        if not text.strip():
+            continue
+        group = []
+        for alternative in text.split("|"):
+            match = DEPENDENCY.match(alternative)
+            if not match:
+                raise Failure(f"cannot parse relationship {alternative.strip()!r}")
+            group.append((match["name"], match["relation"], match["version"]))
+        groups.append(group)
+    return groups
+
+
+def describe(group):
+    return " | ".join(
+        name + (f" ({relation} {version})" if relation else "")
+        for name, relation, version in group
+    )
+
+
+# ---------------------------------------------------------------------------
+# Package index
+
+
+class Package:
+    def __init__(self, fields, origin):
+        self.name = fields["Package"]
+        self.version = fields["Version"]
+        self.fields = fields
+        self.origins = {origin}
+        self.installed_size = int(fields.get("Installed-Size", "0") or 0)
+        self.depends = parse_relationships(fields.get("Pre-Depends")) + parse_relationships(
+            fields.get("Depends")
+        )
+        self.recommends = parse_relationships(fields.get("Recommends"))
+        self.conflicts = [
+            alternative
+            for field in ("Conflicts", "Breaks")
+            for group in parse_relationships(fields.get(field))
+            for alternative in group
+        ]
+        self.provides = {}
+        for group in parse_relationships(fields.get("Provides")):
+            for name, relation, version in group:
+                self.provides[name] = version if relation == "=" else None
+
+    @property
+    def follows_recommends(self):
+        return RECOMMENDS_ORIGIN in self.origins and (
+            self.name in RECOMMENDS_NAMES or self.name.startswith(RECOMMENDS_PREFIXES)
+        )
+
+    def offers(self, name, relation, version):
+        """Whether this package satisfies one alternative of a relationship."""
+        if name == self.name and version_matches(self.version, relation, version):
+            return True
+        if name in self.provides:
+            provided = self.provides[name]
+            if relation is None:
+                return True
+            return provided is not None and version_matches(provided, relation, version)
+        return False
+
+
+class PackageIndex:
+    """Candidate versions of every amd64/all package in the verified indexes."""
+
+    def __init__(self):
+        self.candidates = {}
+        self.essential = set()
+        self.providers = {}
+        self.conflicted_by = {}
+
+    def add(self, fields, origin):
+        if fields.get("Architecture") not in (ARCH, "all"):
+            return
+        if fields.get("Essential", "").strip().lower() == "yes":
+            self.essential.add(fields["Package"])
+        current = self.candidates.get(fields["Package"])
+        if current is not None:
+            order = compare_versions(fields["Version"], current.version)
+            if order < 0:
+                return
+            if order == 0:
+                current.origins.add(origin)
+                return
+        self.candidates[fields["Package"]] = Package(fields, origin)
+
+    def finish(self):
+        for package in self.candidates.values():
+            for name in package.provides:
+                self.providers.setdefault(name, []).append(package)
+            for name, relation, version in package.conflicts:
+                self.conflicted_by.setdefault(name, []).append((package, relation, version))
+        for providers in self.providers.values():
+            providers.sort(key=lambda package: package.name)
+
+    def get(self, name):
+        return self.candidates.get(name)
+
+    def choices(self, name, relation, version):
+        """Candidate packages that could satisfy one alternative, in order."""
+        found = []
+        real = self.candidates.get(name)
+        if real is not None and version_matches(real.version, relation, version):
+            found.append(real)
+        for provider in self.providers.get(name, ()):
+            if provider.name != name and provider.offers(name, relation, version):
+                found.append(provider)
+        return found
+
+
+def parse_packages(text):
+    for paragraph in re.split(r"\n\s*\n", text):
+        fields, last = {}, None
+        for line in paragraph.splitlines():
+            if line[:1] in (" ", "\t"):
+                if last:
+                    fields[last] += "\n" + line
+            elif ":" in line:
+                last, _, value = line.partition(":")
+                fields[last] = value.strip()
+        if "Package" in fields and "Version" in fields:
+            yield fields
+
+
+# ---------------------------------------------------------------------------
+# Private apt session
+
+
+class AptSession:
+    """apt against exactly the given sources, in a private state directory."""
+
+    def __init__(self, entries, workdir):
+        self.root = Path(workdir) / "apt"
+        for sub in ("lists/partial", "cache/archives/partial", "sources", "trusted", "preferences", "conf"):
+            (self.root / sub).mkdir(parents=True, exist_ok=True)
+        (self.root / "status").write_text("")
+        write_sources(entries, self.root / "sources" / "build.sources", "file:")
+        settings = {
+            "Dir::State": self.root,
+            "Dir::State::lists": self.root / "lists",
+            "Dir::State::status": self.root / "status",
+            "Dir::Cache": self.root / "cache",
+            "Dir::Etc::main": "/dev/null",
+            "Dir::Etc::sourcelist": "/dev/null",
+            "Dir::Etc::sourceparts": self.root / "sources",
+            "Dir::Etc::trusted": "/dev/null",
+            "Dir::Etc::trustedparts": self.root / "trusted",
+            "Dir::Etc::preferences": "/dev/null",
+            "Dir::Etc::preferencesparts": self.root / "preferences",
+            "Dir::Etc::parts": self.root / "conf",
+            "Dir::Log": self.root,
+            "Debug::NoLocking": "true",
+            "APT::Architecture": ARCH,
+            "Acquire::Languages": "none",
+            "Acquire::AllowInsecureRepositories": "false",
+            "APT::Get::AllowUnauthenticated": "false",
+            "APT::Install-Recommends": "false",
+            "APT::Install-Suggests": "false",
+        }
+        config = "".join(f'{key} "{value}";\n' for key, value in settings.items())
+        config += f'APT::Architectures {{ "{ARCH}"; }};\n'
+        (self.root / "apt.conf").write_text(config)
+        self.env = {
+            "PATH": SYSTEM_PATH,
+            "APT_CONFIG": str(self.root / "apt.conf"),
+            "LC_ALL": "C.UTF-8",
+            "HOME": os.environ.get("HOME", "/"),
+            "TMPDIR": str(workdir),
+        }
+        # Network archives may sit behind a proxy.
+        for name in ("http_proxy", "https_proxy", "no_proxy"):
+            if name in os.environ:
+                self.env[name] = os.environ[name]
+
+    def run(self, *args):
+        return subprocess.run(
+            ["apt-get", *args], env=self.env, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL,
+        )
+
+    def update(self):
+        result = self.run("update", "--error-on=any")
+        if result.returncode != 0:
+            details = "\n".join(
+                line for line in (result.stdout + result.stderr).splitlines()
+                if line.startswith(("E:", "W:", "Err:"))
+            )
+            raise Failure(f"cannot use the package sources (signed indexes must verify):\n{details}")
+
+    def index(self):
+        result = self.run(
+            "indextargets", "--format", "$(FILENAME)\t$(ORIGIN)\t$(TRUSTED)", "Created-By: Packages"
+        )
+        if result.returncode != 0:
+            raise Failure(f"cannot list package indexes: {result.stderr.strip()}")
+        index = PackageIndex()
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            filename, origin, trusted = (line.split("\t") + ["", ""])[:3]
+            if trusted != "yes":
+                raise Failure(f"package index is not authenticated: {filename}")
+            text = subprocess.run(
+                ["/usr/lib/apt/apt-helper", "cat-file", filename], env=self.env,
+                capture_output=True, text=True,
+            )
+            if text.returncode != 0:
+                raise Failure(f"cannot read package index {filename}: {text.stderr.strip()}")
+            for fields in parse_packages(text.stdout):
+                index.add(fields, origin)
+        index.finish()
+        return index
+
+    def simulate(self, packages):
+        """Names and versions apt installs for the set, or an error."""
+        result = self.run("--simulate", "--quiet", "install", *sorted(packages))
+        if result.returncode != 0:
+            raise Failure("the package set does not install together:\n"
+                          + (result.stdout + result.stderr)[-3000:])
+        installed = {}
+        for line in result.stdout.splitlines():
+            match = re.match(r"^Inst (\S+) \((\S+) ", line)
+            if match:
+                installed[match[1]] = match[2]
+        return installed
+
+
+# ---------------------------------------------------------------------------
+# Selection
+
+
+class Resolver:
+    """The package set: the mandatory closure first, then recommendations.
+
+    The roots, every Essential package and everything they pre-depend or
+    depend on, recursively, are settled first and as a whole: when the
+    alternative or provider taken for one dependency leaves a later
+    dependency unsatisfiable, that earlier choice is revisited (the search
+    backtracks to the choices that caused the dead end, and only to those).
+    Only then are the followed Recommends considered, one group at a time
+    in the order their packages were selected. A recommendation is added
+    together with its own mandatory closure when both fit everything
+    already chosen; otherwise it is omitted and nothing else changes.
+    """
+
+    def __init__(self, index):
+        self.index = index
+        self.selected = {}      # name -> Package, in selection order
+        self.level = {}         # name -> choice level that selected it, 0 when fixed
+        self.obligations = []   # (owner name, OR group), in the order they are met
+        self.depth = 0
+        self.failure = None
+
+    def satisfied(self, group):
+        for name, relation, version in group:
+            for package in self.index.choices(name, relation, version):
+                if package.name in self.selected:
+                    return True
+        return False
+
+    def blockers(self, package):
+        """Selected packages that cannot coexist with package."""
+        index, found = self.index, []
+        for name, relation, version in package.conflicts:
+            for other in index.choices(name, relation, version):
+                if other.name != package.name and other.name in self.selected:
+                    found.append(other.name)
+        for name in (package.name, *package.provides):
+            for other, relation, version in index.conflicted_by.get(name, ()):
+                if (other.name != package.name and other.name in self.selected
+                        and package.offers(name, relation, version)):
+                    found.append(other.name)
+        return found
+
+    def candidates(self, group, reasons):
+        """Packages that could meet group: alternatives in order, providers by name."""
+        seen = set()
+        for name, relation, version in group:
+            choices = self.index.choices(name, relation, version)
+            if not choices:
+                real = self.index.get(name)
+                reasons.append(f"{name} is not available" if real is None
+                               else f"{name} {real.version} does not match")
+            for package in choices:
+                if package.name not in seen:
+                    seen.add(package.name)
+                    yield package
+
+    def select(self, package, level, position=None):
+        """Select package; its dependencies are met next, depth first."""
+        self.selected[package.name] = package
+        self.level[package.name] = level
+        groups = [(package.name, group) for group in package.depends]
+        if position is None:
+            self.obligations.extend(groups)
+        else:
+            self.obligations[position:position] = groups
+        return len(groups)
+
+    def restore(self, selected):
+        while len(self.selected) > selected:
+            name, _package = self.selected.popitem()
+            del self.level[name]
+
+    def solve(self, start):
+        """Meet every obligation from start on; None, or the levels to blame.
+
+        Each unmet obligation is a choice level. When none of its candidates
+        works, the levels responsible are those that selected its owner, a
+        package blocking a candidate, or the owners and blockers of deeper
+        dead ends; levels not responsible are skipped when backtracking.
+        """
+        position = start
+        while position < len(self.obligations) and self.satisfied(self.obligations[position][1]):
+            position += 1
+        if position == len(self.obligations):
+            return None
+        owner, group = self.obligations[position]
+        self.depth += 1
+        level = self.depth
+        blame = {self.level[owner]}
+        reasons, deeper = [], None
+        for package in self.candidates(group, reasons):
+            blocking = self.blockers(package)
+            if blocking:
+                first = min(blocking, key=self.level.__getitem__)
+                blame.add(self.level[first])
+                reasons.append(f"{package.name} conflicts with {first}")
+                continue
+            mark = len(self.selected)
+            added = self.select(package, level, position + 1)
+            result = self.solve(position + 1)
+            if result is None:
+                return None
+            self.restore(mark)
+            del self.obligations[position + 1:position + 1 + added]
+            if level not in result:
+                # Another choice here cannot avoid that dead end.
+                self.depth = level - 1
+                return result
+            blame |= result - {level}
+            deeper = self.failure
+        self.depth = level - 1
+        self.failure = f"{owner} depends on {describe(group)}: " + (
+            "; ".join(reasons) or "nothing can satisfy it")
+        if deeper and not reasons:
+            self.failure += f" ({deeper})"
+        elif deeper:
+            self.failure += f"; otherwise {deeper}"
+        return blame
+
+    def resolve(self):
+        index = self.index
+        absent = [name for name in ROOTS if index.get(name) is None]
+        if absent:
+            raise Failure("not available from the package sources: " + ", ".join(absent))
+        # One level per selected package at most; keep the search off the C stack limit.
+        sys.setrecursionlimit(max(sys.getrecursionlimit(), 4 * len(index.candidates) + 1000))
+        for name in [*ROOTS, *sorted(index.essential)]:
+            package = index.get(name)
+            if package.name in self.selected:
+                continue
+            blocking = self.blockers(package)
+            if blocking:
+                raise Failure(f"cannot select {name}: it conflicts with {blocking[0]}")
+            self.select(package, 0)
+        # The mandatory closure, as a whole, before any recommendation.
+        if self.solve(0) is not None:
+            raise Failure(f"cannot satisfy the roots: {self.failure}")
+        # Followed recommendations, each with its own mandatory closure,
+        # against everything already chosen; one that does not fit is omitted.
+        followed = deque(package for package in self.selected.values() if package.follows_recommends)
+        while followed:
+            package = followed.popleft()
+            for group in package.recommends:
+                if self.satisfied(group):
+                    continue
+                marks = (len(self.selected), len(self.obligations))
+                self.obligations.append((package.name, group))
+                if self.solve(marks[1]) is not None:
+                    self.restore(marks[0])
+                    del self.obligations[marks[1]:]
+                    continue
+                for new in list(self.selected.values())[marks[0]:]:
+                    if new.follows_recommends:
+                        followed.append(new)
+        return {name: package.version for name, package in self.selected.items()}
+
+
+def make_plan(entries, workdir):
+    apt = AptSession(entries, workdir)
+    apt.update()
+    index = apt.index()
+    plan = Resolver(index).resolve()
+    # Cross-check with apt itself: the set must install as a whole, at the
+    # same versions, without pulling in anything else.
+    installed = apt.simulate(plan)
+    if installed != plan:
+        extra = sorted(set(installed) - set(plan))
+        missing = sorted(set(plan) - set(installed))
+        differ = sorted(n for n in plan if n in installed and installed[n] != plan[n])
+        raise Failure(f"apt disagrees with the package set: extra={extra[:10]} "
+                      f"missing={missing[:10]} versions={differ[:10]}")
+    size = sum(index.get(name).installed_size for name in plan) * 1024
+    return plan, size
+
+
+def format_plan(plan):
+    return "".join(f"{name} {plan[name]}\n" for name in sorted(plan, key=str.encode))
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+
+
+def private_workdir():
+    base = os.environ.get("TMPDIR") or tempfile.gettempdir()
+    return Path(tempfile.mkdtemp(prefix=f"{PROG}.", dir=base))
+
+
+def plan_command(options, workdir):
+    entries = read_sources(options["--sources"])
+    plan, _size = make_plan(entries, workdir)
+    sys.stdout.write(format_plan(plan))
+    sys.stdout.flush()
+
+
+def open_output(path):
+    """A temporary file next to PATH, so the final rename is atomic."""
+    target = Path(path)
+    if target.is_dir():
+        raise Failure(f"output {path} is a directory")
+    parent = target.parent
+    if not parent.is_dir():
+        raise Failure(f"output directory {parent} does not exist")
+    try:
+        fd, temp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".partial", dir=parent)
+    except OSError as error:
+        raise Failure(f"cannot write next to {path}: {error.strerror}")
+    return os.fdopen(fd, "wb"), Path(temp)
+
+
+def check_file_size_limit(size):
+    limit, _ = resource.getrlimit(resource.RLIMIT_FSIZE)
+    # The archive holds at least the installed payload; refuse early rather
+    # than fail after the whole installation when it cannot fit.
+    if limit != resource.RLIM_INFINITY and limit < size // 2:
+        raise Failure(f"the file size limit ({limit} bytes) is far below the size of "
+                      f"the image (about {size} bytes)")
+
+
+def check_host_libc(plan):
+    """Refuse early when fakechroot cannot work on this machine.
+
+    In fakechroot mode the machine's own programs and its libfakechroot run
+    against the image's C library, which only works when both are the same
+    glibc release: a newer host misses symbol versions, an older host's
+    libfakechroot crashes inside the image's programs.
+    """
+    try:
+        host = os.confstr("CS_GNU_LIBC_VERSION").split()[1]
+    except (AttributeError, IndexError, OSError, ValueError):
+        return
+    image = _split_version(plan.get("libc6", ""))[1]
+    if image and host.split(".")[:2] != image.split(".")[:2]:
+        raise Failure(f"this machine's C library (glibc {host}) is not the image's "
+                      f"(libc6 {plan['libc6']}), and fakechroot needs both to be the "
+                      f"same release. Build on Debian {SUITE}, for example in a "
+                      f"debian:{SUITE} container")
+
+
+def build_command(options, workdir):
+    entries = read_sources(options["--sources"])
+    output, temp = open_output(options["--output"])
+    try:
+        plan, size = make_plan(entries, workdir)
+        check_host_libc(plan)
+        check_file_size_limit(size)
+        log(f"installing {len(plan)} packages")
+        forbidden = run_mmdebstrap(entries, plan, workdir, output)
+        output.flush()
+        os.fsync(output.fileno())
+        output.close()
+        check_archive(temp, forbidden)
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(temp, 0o666 & ~umask)
+        os.replace(temp, options["--output"])
+        log(f"wrote {options['--output']}")
+    except BaseException:
+        output.close()
+        temp.unlink(missing_ok=True)
+        raise
+
+
+def run_mmdebstrap(entries, plan, workdir, output):
+    sources = workdir / "build.sources"
+    # mmdebstrap installs inside the chroot, which cannot see file: paths.
+    write_sources(entries, sources, "copy:")
+    plan_file = workdir / "plan"
+    plan_file.write_text(format_plan(plan))
+    # The private directory holds mmdebstrap's chroot and every build file.
+    forbidden = [str(workdir)] + [d for entry in entries for d in entry.archive_dirs()]
+    quoted = " ".join(shlex.quote(str(part)) for part in [plan_file, HOOK.parent / "includes", *forbidden])
+    hook = f'/bin/sh {shlex.quote(str(HOOK))} "$1" {quoted}'
+    env = dict(os.environ)
+    env.update({
+        "PATH": SYSTEM_PATH,
+        "LC_ALL": "C.UTF-8",
+        "TMPDIR": str(workdir),
+        # tmpfiles.d entries are applied by systemd on every boot of the
+        # installed system; do not apply them against the build host here.
+        "FAKECHROOT_CMD_SUBST": "/usr/bin/systemd-tmpfiles=/bin/true:/bin/systemd-tmpfiles=/bin/true",
+    })
+    # Under fakechroot the dynamic loader resolves RUNPATH on the build
+    # machine, so the image's systemd programs would look for their private
+    # library there (and mmdebstrap's workaround still adds the pre-257
+    # location). Point them at the image's own copy instead.
+    origin_paths = [f"$ORIGIN/../lib/{MULTIARCH}/systemd", f"$ORIGIN/../{MULTIARCH}/systemd"]
+    env["LD_LIBRARY_PATH"] = ":".join(
+        [path for path in env.get("LD_LIBRARY_PATH", "").split(":") if path] + origin_paths)
+    command = [
+        "mmdebstrap",
+        "--mode=fakechroot",
+        "--variant=custom",
+        "--format=tar",
+        f"--architectures={ARCH}",
+        "--include=" + ",".join(f"{name}={version}" for name, version in sorted(plan.items())),
+        "--aptopt=APT::Install-Recommends \"false\"",
+        "--aptopt=APT::Install-Suggests \"false\"",
+        "--aptopt=Acquire::Languages \"none\"",
+        "--dpkgopt=force-unsafe-io",
+        f"--customize-hook={hook}",
+        SUITE, "-", str(sources),
+    ]
+    process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                               cwd=workdir)
+    try:
+        shutil.copyfileobj(process.stdout, output, 1024 * 1024)
+    except OSError as error:
+        process.kill()
+        process.wait()
+        raise Failure(f"cannot write the image: {error.strerror or error}")
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+    if process.wait() != 0:
+        raise Failure(f"mmdebstrap failed with status {process.returncode}")
+    return forbidden
+
+
+def check_archive(path, forbidden):
+    """Refuse an archive with links into the build or files owned by its user."""
+    uid = os.getuid()
+    try:
+        with tarfile.open(path, "r:") as archive:
+            for member in archive:
+                if uid != 0 and member.uid == uid:
+                    raise Failure(f"{member.name} is owned by the building account")
+                if (member.issym() or member.islnk()) and any(
+                        location in member.linkname for location in forbidden):
+                    raise Failure(f"{member.name} links to {member.linkname}")
+    except tarfile.TarError as error:
+        raise Failure(f"the image is not a valid tar archive: {error}")
+
+
+def terminate(signum, _frame):
+    raise Failure(f"interrupted by signal {signum}")
+
+
+def main(argv):
+    signal.signal(signal.SIGTERM, terminate)
+    signal.signal(signal.SIGINT, terminate)
+    signal.signal(signal.SIGHUP, terminate)
+    # Report an exceeded file size limit as a write error, not a crash.
+    signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    workdir = None
+    try:
+        command, options = parse_args(argv)
+        workdir = private_workdir()
+        {"plan": plan_command, "build": build_command}[command](options, workdir)
+        return 0
+    except Failure as error:
+        log(f"error: {error}")
+        return 1
+    finally:
+        if workdir is not None:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

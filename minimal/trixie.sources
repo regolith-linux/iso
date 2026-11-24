@@ -1,0 +1,22 @@
+# Build sources for bin/regolith-minimal-rootfs: the public Debian 13 and
+# Regolith archives. The keyrings are read on the build machine; see the
+# README for how to get the Regolith one.
+
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: trixie trixie-updates
+Components: main non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.debian.org/debian-security
+Suites: trixie-security
+Components: main non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: https://archive.regolith-desktop.com/debian/stable
+Suites: trixie
+Components: v3.4
+Architectures: amd64
+Signed-By: /usr/share/keyrings/regolith-archive-keyring.gpg

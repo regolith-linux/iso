@@ -1,0 +1,6 @@
+Types: deb
+URIs: https://archive.regolith-desktop.com/debian/stable
+Suites: trixie
+Components: v3.4
+Architectures: amd64
+Signed-By: /usr/share/keyrings/regolith-archive-keyring.gpg
