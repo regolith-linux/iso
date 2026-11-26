@@ -1,0 +1,92 @@
+#!/usr/bin/python3
+"""Check every initrd ELF's interpreter and NEEDED closure in a rootfs tar.
+
+Requires initramfs-tools-core and binutils on the checking machine.
+Runs unprivileged and never executes an image binary.
+"""
+
+import os
+import posixpath
+import re
+import subprocess
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+
+
+def resolve(root, name):
+    """Resolve absolute image symlinks within the unpacked initramfs."""
+    name = posixpath.normpath("/" + name.lstrip("/"))
+    for _ in range(40):
+        parts = name.lstrip("/").split("/")
+        for n in range(1, len(parts) + 1):
+            link = root.joinpath(*parts[:n])
+            if link.is_symlink():
+                target = os.readlink(link)
+                base = target if target.startswith("/") else posixpath.join(
+                    "/", *parts[:n - 1], target)
+                name = posixpath.normpath(posixpath.join(base, *parts[n:]))
+                break
+        else:
+            return root / name.lstrip("/")
+    raise AssertionError(f"cyclic initramfs link: {name}")
+
+
+def check(root):
+    count = needed_count = 0
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        with path.open("rb") as stream:
+            if stream.read(4) != b"\x7fELF":
+                continue
+        count += 1
+        name = "/" + str(path.relative_to(root))
+        output = subprocess.check_output(
+            ["readelf", "-lW", "-dW", str(path)], text=True)
+        interpreter = re.search(r"Requesting program interpreter: (.*?)\]", output)
+        if interpreter:
+            assert resolve(root, interpreter[1]).is_file(), (
+                f"{name}: missing interpreter {interpreter[1]}")
+        directories = ["/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
+                       "/lib", "/usr/lib"]
+        for value in re.findall(r"\((?:RUNPATH|RPATH)\).*?\[(.*?)\]", output):
+            for directory in value.split(":"):
+                directory = directory.replace("${ORIGIN}", posixpath.dirname(name))
+                directory = directory.replace("$ORIGIN", posixpath.dirname(name))
+                assert directory.startswith("/"), f"{name}: relative search path"
+                directories.insert(0, directory)
+        for needed in re.findall(r"\(NEEDED\).*?\[(.*?)\]", output):
+            needed_count += 1
+            candidates = [needed] if "/" in needed else [
+                posixpath.join(directory, needed) for directory in directories]
+            assert any(resolve(root, candidate).is_file() for candidate in candidates), (
+                f"{name}: missing NEEDED {needed}")
+    assert count, "no ELF files in initramfs"
+    return count, needed_count
+
+
+def main(archive_path):
+    with tempfile.TemporaryDirectory(prefix="regolith-initramfs-check.") as directory:
+        work = Path(directory)
+        found = 0
+        with tarfile.open(archive_path, "r:") as archive:
+            for member in archive:
+                if not member.isfile() or not member.name.lstrip("./").startswith("boot/initrd.img-"):
+                    continue
+                found += 1
+                initrd = work / f"initrd-{found}"
+                initrd.write_bytes(archive.extractfile(member).read())
+                unpacked = work / f"unpacked-{found}"
+                subprocess.run(["unmkinitramfs", str(initrd), str(unpacked)], check=True)
+                # Older unmkinitramfs separates early/main archives; newer
+                # versions merge them into DIRECTORY like the kernel does.
+                root = unpacked / "main" if (unpacked / "main/init").exists() else unpacked
+                count, needed = check(root)
+                print(f"{member.name}: {count} ELF files, {needed} NEEDED edges, closure complete")
+        assert found, "no initrd in rootfs archive"
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])

@@ -67,6 +67,21 @@ placeholder identity (hostname `regolith`, empty machine id, no users) and
 boots to lightdm; partitioning, the bootloader, users and locale are left
 to the installer.
 
+The customize hook regenerates the initramfs using the image's own dynamic
+loader to resolve libraries. This avoids fakechroot's replacement `ldd`,
+which omits RUNPATH libraries, including systemd's private library and its
+dependencies. The resolver is removed before the archive
+is written; a library resolved outside the image makes the build fail.
+To check every initrd ELF's interpreter and `NEEDED` libraries without
+executing it, install `initramfs-tools-core` and `binutils` and run:
+
+```
+python3 tests/check-initramfs regolith-trixie-rootfs.tar
+```
+
+Resolver regression tests (including fakechroot execution and host library
+fallback) run with `python3 tests/test_initramfs_ldd.py`.
+
 Both subcommands need `mmdebstrap`, `fakechroot`, `fakeroot`, `apt` and
 `python3`. `plan` runs on any Debian or Ubuntu system. `build` runs the
 machine's own programs and fakechroot library against the image's C

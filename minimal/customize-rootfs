@@ -23,6 +23,33 @@ fail() {
 
 admindir="$root/var/lib/dpkg"
 
+# --- Generate initramfs libraries from the image, never from the host. ---
+# initramfs-tools' copy_exec runs env --unset=LD_PRELOAD ldd, but fakechroot
+# substitutes both commands and its ldd ignores ELF RUNPATH. A temporary
+# conf hook selects an image-aware ldd for this generation only.
+# Keep copy_file under fakeroot so the archive retains package ownership.
+shim="$plan.initramfs-bin"
+conf="$root/usr/share/initramfs-tools/conf-hooks.d/regolith-fakechroot"
+mkdir -p "$shim"
+install -m 0755 "$(dirname "$includes")/initramfs-ldd-wrapper" "$shim/ldd"
+export REGOLITH_BUILD_ROOT="$root"
+export REGOLITH_LDD_ERRORS="$plan.initramfs-errors"
+export REGOLITH_LDD_USED="$plan.initramfs-used"
+export REGOLITH_LDD_SCRIPT="$(dirname "$includes")/initramfs-ldd"
+export REGOLITH_LDD_WRAPPER="$shim/ldd"
+printf '%s\n' \
+    'FAKECHROOT_CMD_SUBST=$(printf "%s" "$FAKECHROOT_CMD_SUBST" | tr ":" "\n" | sed "/\/ldd=/d" | paste -sd:)' \
+    'export FAKECHROOT_CMD_SUBST="$FAKECHROOT_CMD_SUBST:/usr/bin/ldd=$REGOLITH_LDD_WRAPPER:/bin/ldd=$REGOLITH_LDD_WRAPPER"' > "$conf"
+chroot "$root" /usr/sbin/update-initramfs -u -k all
+rm -f "$conf"
+rm -rf "$shim"
+[ -e "$REGOLITH_LDD_USED" ] || fail "initramfs did not use the image library resolver"
+if [ -s "$REGOLITH_LDD_ERRORS" ]; then
+    cat "$REGOLITH_LDD_ERRORS" >&2
+    fail "initramfs libraries could not be resolved from the image"
+fi
+rm -f "$REGOLITH_LDD_ERRORS" "$REGOLITH_LDD_USED"
+
 # --- The installed package set is exactly the plan, fully configured. ---
 dpkg-query --admindir="$admindir" -W -f '${db:Status-Abbrev} ${Package} ${Version}\n' \
     | awk '$1 == "ii" { print $2, $3; next } { print "unconfigured:", $2; }' \

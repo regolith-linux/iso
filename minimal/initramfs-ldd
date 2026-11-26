@@ -1,0 +1,100 @@
+#!/usr/bin/python3
+"""Build-only ldd for initramfs-tools running inside fakechroot.
+
+copy_exec asks env to unset LD_PRELOAD, but fakechroot substitutes both
+env and ldd; its ldd does not follow ELF RUNPATH. Use the image's loader
+with real paths, then return image-relative paths for copy_file (which
+still runs under fakechroot and fakeroot).
+"""
+
+import os
+import re
+import struct
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main():
+    root = os.environ["REGOLITH_BUILD_ROOT"].rstrip("/")
+    Path(os.environ["REGOLITH_LDD_USED"]).touch()
+    source = root + "/" + sys.argv[1].lstrip("/")
+    # Static ELF files need no libraries. Do not hide loader errors for
+    # dynamic files: copy_exec's pipeline ignores ldd's exit status, so
+    # leave an error marker that the customize hook checks afterwards.
+    with open(source, "rb") as stream:
+        header = stream.read(64)
+        if header[:5] != b"\x7fELF\x02" or header[5] != 1:
+            raise ValueError(f"not an amd64 ELF: {sys.argv[1]}")
+        offset = struct.unpack_from("<Q", header, 32)[0]
+        entry_size, count = struct.unpack_from("<HH", header, 54)
+        stream.seek(offset)
+        entries = stream.read(entry_size * count)
+        segments = [struct.unpack_from("<IIQQQQQQ", entries, n * entry_size)
+                    for n in range(count)]
+        interpreter = next((segment for segment in segments if segment[0] == 3), None)
+        if interpreter:
+            stream.seek(interpreter[2])
+            interpreter = stream.read(interpreter[5]).rstrip(b"\0").decode()
+        dynamic = next((segment for segment in segments if segment[0] == 2), None)
+        if dynamic is None:
+            return
+        stream.seek(dynamic[2])
+        data = stream.read(dynamic[5])
+        tags = dict(struct.iter_unpack("<QQ", data))
+        paths = []
+        # The host loader cannot translate absolute image RUNPATH/RPATH.
+        # Read those entries without executing the binary and supply their
+        # real build paths explicitly. $ORIGIN is the image binary's dir.
+        for tag in (15, 29):
+            if tag not in tags:
+                continue
+            address = tags[5] + tags[tag]
+            segment = next(segment for segment in segments
+                           if segment[0] == 1 and segment[3] <= address < segment[3] + segment[5])
+            stream.seek(segment[2] + address - segment[3])
+            value = bytearray()
+            while (byte := stream.read(1)) and byte != b"\0":
+                value.extend(byte)
+            for directory in value.decode().split(":"):
+                if directory.startswith("/"):
+                    paths.append(root + directory)
+                elif directory.startswith(("$ORIGIN", "${ORIGIN}")):
+                    paths.append(directory.replace("${ORIGIN}", os.path.dirname(source)).replace(
+                        "$ORIGIN", os.path.dirname(source)))
+                else:
+                    raise ValueError(f"relative library search path: {directory!r}")
+    libdir = root + "/usr/lib/x86_64-linux-gnu"
+    env = dict(os.environ)
+    env.pop("LD_LIBRARY_PATH", None)
+    env.pop("LD_PRELOAD", None)
+    result = subprocess.run(
+        [libdir + "/ld-linux-x86-64.so.2", "--inhibit-cache",
+         "--library-path", ":".join([*paths, libdir, root + "/usr/lib", root + "/lib"]),
+         "--list", source], env=env, text=True, capture_output=True)
+    if result.returncode:
+        raise ValueError(result.stderr.strip())
+    for line in result.stdout.splitlines():
+        # The loader itself is printed with its virtual PT_INTERP path;
+        # copy that path from the image, too. Every resolved dependency
+        # must come from the image, even when the host happens to have it.
+        match = re.search(r"=>\s+(.*?)\s+\(0x[0-9a-f]+\)", line)
+        if match and not match[1].startswith(root + "/"):
+            raise ValueError(f"library resolved outside the image: {line.strip()}")
+    sys.stdout.write(result.stdout.replace(root + "/", "/"))
+    # --list may print PT_INTERP => the loader's real path. copy_exec uses
+    # only the right-hand path, so explicitly retain the interpreter alias
+    # that the kernel will open when executing a binary from the initrd.
+    if interpreter:
+        sys.stdout.write(f"\t{interpreter} (0x0000000000000000)\n")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        message = f"{sys.argv[1:]}: {error}\n"
+        with Path(os.environ["REGOLITH_LDD_ERRORS"]).open("a") as stream:
+            stream.write(message)
+        sys.stderr.write(message)
+        sys.exit(1)

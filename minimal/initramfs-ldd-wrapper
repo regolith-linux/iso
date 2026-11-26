@@ -1,0 +1,5 @@
+#!/bin/sh
+# env.fakechroot preserves LD_PRELOAD even for env --unset=LD_PRELOAD.
+# Drop it for the resolver only; copy_file must retain fakechroot/fakeroot.
+unset LD_PRELOAD LD_LIBRARY_PATH
+exec /usr/bin/python3 "$REGOLITH_LDD_SCRIPT" "$@"
